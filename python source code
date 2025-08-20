@@ -1,0 +1,41 @@
+!pip install -q openai-whisper ffmpeg
+
+# ========================
+# 📂 Step 2: Upload Audio File
+# ========================
+from google.colab import files
+
+uploaded = files.upload()
+audio_path = list(uploaded.keys())[0]
+
+# ========================
+# 🎧 Step 3: Convert to 16kHz mono if needed
+# ========================
+import torchaudio
+
+def preprocess_audio(input_path, output_path="converted.wav"):
+    waveform, sr = torchaudio.load(input_path)
+
+    # Convert to mono
+    if waveform.shape[0] > 1:
+        waveform = waveform.mean(dim=0, keepdim=True)
+
+    # Resample to 16000 Hz
+    if sr != 16000:
+        resampler = torchaudio.transforms.Resample(sr, 16000)
+        waveform = resampler(waveform)
+
+    torchaudio.save(output_path, waveform, 16000)
+    return output_path
+
+processed_path = preprocess_audio(audio_path)
+
+# ========================
+# 🤖 Step 4: Load Whisper and Transcribe
+# ========================
+import whisper
+
+model = whisper.load_model("medium.en")  # or "medium.en" for higher accuracy
+
+result = model.transcribe(processed_path)
+print("📄 Transcription:\n", result["text"])
