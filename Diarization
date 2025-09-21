@@ -1,1 +1,107 @@
+# ========================
+# ✅ Install Dependencies
+# ========================
+!pip install -q openai-whisper ffmpeg
+!pip install -q pyannote.audio moviepy
 
+# ========================
+# 📂 Step 1: Upload Audio/Video File
+# ========================
+from google.colab import files
+uploaded = files.upload()
+input_path = list(uploaded.keys())[0]
+
+# ========================
+# 🎥 Step 2: Extract audio from video if needed (.mp4 to .wav)
+# ========================
+import os
+from moviepy.editor import VideoFileClip
+
+def extract_audio_from_video(video_path, audio_output="extracted_audio.wav"):
+    clip = VideoFileClip(video_path)
+    clip.audio.write_audiofile(audio_output, codec='pcm_s16le', fps=16000)
+    return audio_output
+
+if input_path.endswith(".mp4"):
+    audio_path = extract_audio_from_video(input_path)
+else:
+    audio_path = input_path  # Already audio
+
+# ========================
+# 🎧 Step 3: Convert to mono 16kHz
+# ========================
+import torchaudio
+
+def preprocess_audio(input_path, output_path="converted.wav"):
+    waveform, sr = torchaudio.load(input_path)
+    if waveform.shape[0] > 1:
+        waveform = waveform.mean(dim=0, keepdim=True)
+    if sr != 16000:
+        resampler = torchaudio.transforms.Resample(sr, 16000)
+        waveform = resampler(waveform)
+    torchaudio.save(output_path, waveform, 16000)
+    return output_path
+
+processed_path = preprocess_audio(audio_path)
+
+# ========================
+# 🗣️ Step 4: Speaker Diarization using PyAnnote
+# ========================
+from pyannote.audio import Pipeline
+
+# 🔐 Insert your Hugging Face token here
+HUGGINGFACE_TOKEN = "hf_xxxxxxxxxxxxxxxxxxxxxxxx"  # Replace this with your actual token
+
+# ⚠️ Make sure you've accepted the terms: https://huggingface.co/pyannote/speaker-diarization
+diarization_pipeline = Pipeline.from_pretrained(
+    "pyannote/speaker-diarization",
+    use_auth_token=HUGGINGFACE_TOKEN
+)
+
+diarization = diarization_pipeline(processed_path)
+
+# Store speaker segments
+speaker_segments = []
+for turn, _, speaker in diarization.itertracks(yield_label=True):
+    speaker_segments.append({
+        "start": turn.start,
+        "end": turn.end,
+        "speaker": speaker
+    })
+
+# ========================
+# 🧠 Step 5: Transcribe with Whisper
+# ========================
+import whisper
+model = whisper.load_model("medium.en")
+whisper_result = model.transcribe(processed_path, word_timestamps=True)
+
+# ========================
+# 🧾 Step 6: Merge Diarization with Transcript
+# ========================
+final_output = []
+for segment in whisper_result["segments"]:
+    seg_start = segment['start']
+    seg_end = segment['end']
+    text = segment['text'].strip()
+
+    # Match speaker by timestamp
+    matched_speaker = "Unknown"
+    for s in speaker_segments:
+        if s['start'] <= seg_start <= s['end'] or s['start'] <= seg_end <= s['end']:
+            matched_speaker = s['speaker']
+            break
+
+    final_output.append({
+        "start": seg_start,
+        "end": seg_end,
+        "speaker": matched_speaker,
+        "text": text
+    })
+
+# ========================
+# 📄 Final Output as JSON
+# ========================
+import json
+json_output = json.dumps(final_output, indent=2)
+print(json_output)
